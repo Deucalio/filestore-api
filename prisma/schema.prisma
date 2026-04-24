@@ -1,0 +1,53 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Plan {
+  basic
+  pro
+  enterprise
+}
+
+model App {
+  id          String      @id @default(uuid())
+  name        String
+  plan        Plan
+  accessToken String      @unique @map("access_token")
+  storageUsed Int         @default(0) @map("storage_used")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  files       File[]
+  directories Directory[]
+
+  @@map("apps")
+}
+
+model File {
+  id        String   @id @default(uuid())
+  appId     String   @map("app_id")
+  name      String
+  dirPath   String   @map("dir_path")
+  fullPath  String   @map("full_path")
+  size      Int
+  mimeType  String   @map("mime_type")
+  createdAt DateTime @default(now()) @map("created_at")
+  app       App      @relation(fields: [appId], references: [id])
+
+  @@unique([appId, fullPath])
+  @@map("files")
+}
+
+model Directory {
+  id        String   @id @default(uuid())
+  appId     String   @map("app_id")
+  path      String
+  createdAt DateTime @default(now()) @map("created_at")
+  app       App      @relation(fields: [appId], references: [id])
+
+  @@unique([appId, path])
+  @@map("directories")
+}
