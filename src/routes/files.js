@@ -107,7 +107,7 @@ router.post("/upload", authenticate, upload.single("file"), async (req, res, nex
 // ── POST /files/batch-upload ──────────────────────────────────────────────────
 // Upload multiple files at once.
 // Form fields: files[] (required), path (optional)
-router.post("/batch-upload", authenticate, upload.array("files", 100), async (req, res, next) => {
+router.post("/batch-upload", authenticate, upload.array("files[]", 100), async (req, res, next) => {
   if (!req.files || req.files.length === 0) {
     return res.status(400).json({ error: "No files provided. Use form-data with field name 'files[]'." });
   }
