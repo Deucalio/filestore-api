@@ -541,7 +541,7 @@ pm2 start "npm start" --name filestore-api
 
 # Auto-restart on reboot
 pm2 save
-pm2 startup
+pm2 restart filestore-api
 
 # Nginx reverse proxy (example)
 # proxy_pass http://127.0.0.1:3000;
