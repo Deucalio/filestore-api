@@ -3,9 +3,10 @@ require("dotenv").config();
 const express = require("express");
 const prisma  = require("./db");
 
-const appsRouter  = require("./routes/apps");
-const dirsRouter  = require("./routes/dirs");
-const filesRouter = require("./routes/files");
+const appsRouter    = require("./routes/apps");
+const dirsRouter    = require("./routes/dirs");
+const filesRouter   = require("./routes/files");
+const previewRouter = require("./routes/preview");
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -22,9 +23,10 @@ app.use((req, _res, next) => {
 });
 
 // ── Routes ────────────────────────────────────────────────────────────────────
-app.use("/apps",  appsRouter);
-app.use("/dirs",  dirsRouter);
-app.use("/files", filesRouter);
+app.use("/apps",    appsRouter);
+app.use("/dirs",    dirsRouter);
+app.use("/files",   filesRouter);
+app.use("/preview", previewRouter);
 
 // ── Root: API Info ───────────────────────────────────────────────────────────
 app.get("/", (_req, res) => {
@@ -54,8 +56,11 @@ app.get("/", (_req, res) => {
       "GET    /files/download?path=":"Download / stream a file",
       "DELETE /files":               "Delete a single file (body: { path })",
       "DELETE /files/batch":         "Delete multiple files (body: { paths: [] })",
+
+      "GET    /preview/:id":         "Public image preview by file id (no token) — embed in <img src>",
+      "GET    /preview?ids=a,b,c":   "Preview multiple images — returns embeddable URL per file (no token)",
     },
-    auth: "All endpoints except POST /apps/create require: Authorization: Bearer <access_token>",
+    auth: "All endpoints require Authorization: Bearer <access_token>, EXCEPT: POST /apps/create and GET /preview (public, image-only)",
   });
 });
 
