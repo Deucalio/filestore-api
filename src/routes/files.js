@@ -188,6 +188,101 @@ router.get("/download", authenticate, async (req, res, next) => {
   }
 });
 
+// ── GET /files/preview ────────────────────────────────────────────────────────
+// PUBLIC, token-less preview of IMAGE files so they can be embedded directly in
+// a website, e.g. <img src="https://host/files/preview?path=/img/logo.png">.
+// An <img> tag cannot send an Authorization header, so this route requires none.
+// Only image/* files are ever served. Optionally scope to a specific app with
+// ?app=<appId> (recommended when multiple apps share path names).
+//
+// Single image:  GET /files/preview?path=/dir/photo.png      → raw image bytes
+// Multiple:      GET /files/preview?paths=/a.png,/b.png       → JSON list of URLs
+router.get("/preview", async (req, res, next) => {
+  const isImage = (m) => typeof m === "string" && m.startsWith("image/");
+  const appId   = req.query.app || null;
+
+  // Look up a single file by virtual path, optionally scoped to an app.
+  async function findByPath(virtualPath) {
+    if (appId) {
+      return prisma.file.findUnique({
+        where: { appId_fullPath: { appId, fullPath: virtualPath } },
+      });
+    }
+    return prisma.file.findFirst({ where: { fullPath: virtualPath } });
+  }
+
+  try {
+    // ── Multiple-image mode ──────────────────────────────────────────────────
+    if (req.query.paths) {
+      const list = String(req.query.paths)
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map(sanitizePath);
+
+      if (list.length === 0) {
+        return res.status(400).json({ error: "No valid paths provided." });
+      }
+
+      const base     = `${req.protocol}://${req.get("host")}/files/preview`;
+      const previews = [];
+      const errors   = [];
+
+      for (const virtualPath of list) {
+        const file = await findByPath(virtualPath);
+        if (!file) {
+          errors.push({ path: virtualPath, error: "File not found." });
+          continue;
+        }
+        if (!isImage(file.mimeType)) {
+          errors.push({ path: virtualPath, error: "Not an image.", mime_type: file.mimeType });
+          continue;
+        }
+        previews.push({
+          name:       file.name,
+          path:       file.fullPath,
+          url:        `${base}?path=${encodeURIComponent(file.fullPath)}`,
+          mime_type:  file.mimeType,
+          size:       formatBytes(file.size),
+          size_bytes: file.size,
+        });
+      }
+
+      return res.json({ total: previews.length, failed: errors.length, previews, errors });
+    }
+
+    // ── Single-image mode ────────────────────────────────────────────────────
+    const rawPath = req.query.path;
+    if (!rawPath) {
+      return res.status(400).json({ error: "Query param 'path' (or 'paths') is required." });
+    }
+
+    const virtualPath = sanitizePath(rawPath);
+    const file        = await findByPath(virtualPath);
+
+    if (!file) {
+      return res.status(404).json({ error: "File not found.", path: virtualPath });
+    }
+    if (!isImage(file.mimeType)) {
+      return res.status(415).json({ error: "Only image files can be previewed.", path: virtualPath, mime_type: file.mimeType });
+    }
+
+    const realPath = resolvePath(file.appId, file.fullPath);
+    if (!fs.existsSync(realPath)) {
+      return res.status(410).json({ error: "Image record exists but physical file is missing." });
+    }
+
+    res.setHeader("Content-Type", file.mimeType);
+    res.setHeader("Content-Disposition", `inline; filename="${file.name}"`);
+    res.setHeader("Content-Length", file.size);
+    res.setHeader("Cache-Control", "public, max-age=86400");
+
+    return fs.createReadStream(realPath).pipe(res);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ── GET /files/info ───────────────────────────────────────────────────────────
 // Get metadata for a single file.
 // Query: ?path=/some/dir/file.pdf

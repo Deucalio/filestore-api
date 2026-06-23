@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npm install *)",
       "Bash(node -e \"require\\('./src/routes/preview.js'\\); console.log\\('preview route OK'\\)\")",
-      "Bash(node --check src/index.js)"
+      "Bash(node --check src/index.js)",
+      "Bash(node -e \"require\\('./src/routes/files.js'\\); console.log\\('files route OK'\\)\")"
     ]
   }
 }

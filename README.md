@@ -86,7 +86,7 @@ Authorization: Bearer <your_access_token>
 **Exceptions (public, no token):**
 
 - `POST /apps/create` — you need it to obtain a token in the first place.
-- `GET /preview/:id` and `GET /preview?ids=...` — public **image** preview, so files can be embedded directly in `<img src="...">` tags (an `<img>` tag cannot send an `Authorization` header). Access is gated by each file's unguessable UUID.
+- `GET /files/preview?path=...` — public **image** preview, so files can be embedded directly in `<img src="...">` tags (an `<img>` tag cannot send an `Authorization` header).
 
 ---
 
@@ -505,37 +505,47 @@ Delete multiple files in one request.
 
 ### Preview (public, no token)
 
-Token-less preview of **image files only**, designed to be embedded directly in a website via `<img src="...">`. A file is identified by its globally-unique UUID `id` (returned on upload and by `GET /files`), which acts as an unguessable capability — only someone who knows the id can view the image. Non-image files are rejected.
+Token-less preview of **image files only**, designed to be embedded directly in a website via `<img src="...">`. Files are addressed by their virtual `path` (same path used everywhere else in the API). Non-image files are rejected.
 
-#### `GET /preview/:id`
-Stream a single image inline (correct `Content-Type`, `Content-Disposition: inline`, cached 1 day). Use the URL directly as an image source.
+> **Multi-tenant note:** without a token the app can't be inferred from the request, so by default the first file matching the path (across all apps) is served. If multiple apps may share path names, scope the lookup by adding `&app=<appId>`.
+
+#### `GET /files/preview?path=`
+Returns the **raw image bytes** inline (correct `Content-Type`, `Content-Disposition: inline`, cached 1 day). Use the URL directly as an image source.
+
+**Query params:**
+
+| Param | Required | Description                                   |
+|-------|----------|-----------------------------------------------|
+| path  | Yes      | Full virtual path of the image                |
+| app   | No       | App id to scope the lookup (disambiguation)   |
 
 **Example:**
 ```html
-<img src="http://localhost:3000/preview/f1a2b3c4-..." />
+<img src="https://file-upload.nakson.services/files/preview?path=/ticketing/manual-pump.png" />
 ```
 
 ```bash
 # Fetch the raw image bytes (no Authorization header needed)
-curl -O -J "http://localhost:3000/preview/f1a2b3c4-..."
+curl -O -J "http://localhost:3000/files/preview?path=/images/logo.png"
 ```
 
 Responses: `404` (not found), `415` (file is not an image), `410` (record exists but file missing on disk).
 
 ---
 
-#### `GET /preview?ids=a,b,c`
-Preview **multiple** images at once. Returns JSON with a ready-to-embed preview URL per file. Non-images and unknown ids are reported under `errors` instead of failing the whole request.
+#### `GET /files/preview?paths=`
+Preview **multiple** images at once. Returns JSON with a ready-to-embed preview URL per file. Non-images and unknown paths are reported under `errors` instead of failing the whole request.
 
 **Query params:**
 
-| Param | Required | Description                          |
-|-------|----------|--------------------------------------|
-| ids   | Yes      | Comma-separated file ids             |
+| Param | Required | Description                                   |
+|-------|----------|-----------------------------------------------|
+| paths | Yes      | Comma-separated full virtual paths            |
+| app   | No       | App id to scope the lookup (disambiguation)   |
 
 **Example:**
 ```bash
-curl "http://localhost:3000/preview?ids=f1a2b3c4-...,a9b8c7d6-...,deadbeef-..."
+curl "http://localhost:3000/files/preview?paths=/images/a.png,/images/b.jpg,/docs/report.pdf"
 ```
 
 **Response `200`:**
@@ -545,16 +555,16 @@ curl "http://localhost:3000/preview?ids=f1a2b3c4-...,a9b8c7d6-...,deadbeef-..."
   "failed": 1,
   "previews": [
     {
-      "id": "f1a2b3c4-...",
-      "name": "photo.jpg",
-      "url": "http://localhost:3000/preview/f1a2b3c4-...",
-      "mime_type": "image/jpeg",
+      "name": "a.png",
+      "path": "/images/a.png",
+      "url": "http://localhost:3000/files/preview?path=%2Fimages%2Fa.png",
+      "mime_type": "image/png",
       "size": "2.34 MB",
       "size_bytes": 2453678
     }
   ],
   "errors": [
-    { "id": "deadbeef-...", "error": "Not an image. Only image files can be previewed.", "mime_type": "application/pdf" }
+    { "path": "/docs/report.pdf", "error": "Not an image.", "mime_type": "application/pdf" }
   ]
 }
 ```
@@ -632,8 +642,7 @@ filestore-api/
 │   ├── routes/
 │   │   ├── apps.js           # /apps endpoints
 │   │   ├── dirs.js           # /dirs endpoints
-│   │   ├── files.js          # /files endpoints
-│   │   └── preview.js        # /preview endpoints (public image preview)
+│   │   └── files.js          # /files endpoints (incl. public /files/preview)
 │   └── utils/
 │       └── storage.js        # Path resolution, sanitization, helpers
 ├── storage/                  # Runtime: per-app file storage (gitignored)

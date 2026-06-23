@@ -3,10 +3,9 @@ require("dotenv").config();
 const express = require("express");
 const prisma  = require("./db");
 
-const appsRouter    = require("./routes/apps");
-const dirsRouter    = require("./routes/dirs");
-const filesRouter   = require("./routes/files");
-const previewRouter = require("./routes/preview");
+const appsRouter  = require("./routes/apps");
+const dirsRouter  = require("./routes/dirs");
+const filesRouter = require("./routes/files");
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -23,10 +22,9 @@ app.use((req, _res, next) => {
 });
 
 // ── Routes ────────────────────────────────────────────────────────────────────
-app.use("/apps",    appsRouter);
-app.use("/dirs",    dirsRouter);
-app.use("/files",   filesRouter);
-app.use("/preview", previewRouter);
+app.use("/apps",  appsRouter);
+app.use("/dirs",  dirsRouter);
+app.use("/files", filesRouter);
 
 // ── Root: API Info ───────────────────────────────────────────────────────────
 app.get("/", (_req, res) => {
@@ -54,13 +52,12 @@ app.get("/", (_req, res) => {
       "GET    /files":               "List all files (supports ?dir, ?search, ?page, ?limit)",
       "GET    /files/info?path=":    "Get metadata for a specific file",
       "GET    /files/download?path=":"Download / stream a file",
+      "GET    /files/preview?path=": "Public image preview (no token) — returns raw image for <img src>",
+      "GET    /files/preview?paths=":"Preview multiple images — returns embeddable URL per file (no token)",
       "DELETE /files":               "Delete a single file (body: { path })",
       "DELETE /files/batch":         "Delete multiple files (body: { paths: [] })",
-
-      "GET    /preview/:id":         "Public image preview by file id (no token) — embed in <img src>",
-      "GET    /preview?ids=a,b,c":   "Preview multiple images — returns embeddable URL per file (no token)",
     },
-    auth: "All endpoints require Authorization: Bearer <access_token>, EXCEPT: POST /apps/create and GET /preview (public, image-only)",
+    auth: "All endpoints require Authorization: Bearer <access_token>, EXCEPT: POST /apps/create and GET /files/preview (public, image-only)",
   });
 });
 
