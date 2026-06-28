@@ -53,7 +53,7 @@ app.get("/", (_req, res) => {
       "GET    /files/info?path=":    "Get metadata for a specific file",
       "GET    /files/download?path=":"Download / stream a file",
       "GET    /files/preview?path=": "Public image preview (no token) — returns raw image for <img src>",
-      "GET    /files/preview?paths=":"Preview multiple images — returns embeddable URL per file (no token)",
+      "GET    /files/stream?path=":  "Public video/audio stream (no token) — Range-aware, supports seeking, for <video>/<audio src>",
       "DELETE /files":               "Delete a single file (body: { path })",
       "DELETE /files/batch":         "Delete multiple files (body: { paths: [] })",
     },

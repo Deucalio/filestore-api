@@ -87,6 +87,25 @@ Authorization: Bearer <your_access_token>
 
 - `POST /apps/create` — you need it to obtain a token in the first place.
 - `GET /files/preview?path=...` — public **image** preview, so files can be embedded directly in `<img src="...">` tags (an `<img>` tag cannot send an `Authorization` header).
+- `GET /files/stream?path=...` — public **video/audio** stream, so media can be embedded directly in `<video src="...">` / `<audio src="...">` tags (these tags also cannot send an `Authorization` header).
+
+---
+
+## Serving files: which route should I use?
+
+There are three ways to get bytes back out, depending on the file and where it's going:
+
+| You want to…                                   | Use                      | Auth?       | Notes                                                                 |
+|------------------------------------------------|--------------------------|-------------|----------------------------------------------------------------------|
+| Show an **image** in a web page (`<img src>`)  | `GET /files/preview`     | ❌ Public   | Returns raw image bytes inline. Image MIME types only.               |
+| Play a **video/audio** file (`<video src>`)    | `GET /files/stream`      | ❌ Public   | Range-aware (`206`), so **seeking** works. Video/audio MIME only.    |
+| Download **any** file (esp. private documents) | `GET /files/download`    | ✅ Bearer   | Forces a download (`Content-Disposition: attachment`). Token-secured.|
+
+**Rules of thumb:**
+
+- **Images → `/preview`**, video/audio → `/stream`. Both are public-by-path so a browser tag can load them with no token.
+- **Everything sensitive (PDFs, CSVs, private docs) → `/download`**, which requires the Bearer token and is never publicly addressable.
+- **One request = one file.** There is no endpoint that returns multiple images/videos' bytes in a single response — each `<img>`/`<video>` makes its own request, and the browser fires them in parallel automatically. To render a gallery, list the files first (`GET /files?dir=...`) then build one `/files/preview?path=` URL per `<img>`.
 
 ---
 
@@ -531,45 +550,57 @@ curl -O -J "http://localhost:3000/files/preview?path=/images/logo.png"
 
 Responses: `404` (not found), `415` (file is not an image), `410` (record exists but file missing on disk).
 
+> **Rendering many images?** There's no batch-bytes endpoint — one request returns one image. List the directory first (`GET /files?dir=...`), then render one `<img src="/files/preview?path=...">` per result; the browser fetches them in parallel.
+
 ---
 
-#### `GET /files/preview?paths=`
-Preview **multiple** images at once. Returns JSON with a ready-to-embed preview URL per file. Non-images and unknown paths are reported under `errors` instead of failing the whole request.
+### Streaming (public, no token)
+
+Token-less streaming of **video/audio files only**, designed to be embedded directly via `<video src="...">` or `<audio src="...">`. Like `/preview`, files are addressed by their virtual `path`, and the same multi-tenant note applies (scope with `&app=<appId>` when paths may collide across apps). Non-media files are rejected with `415` — use `/download` for those.
+
+The key difference from `/preview` and `/download` is **HTTP Range support**. The route advertises `Accept-Ranges: bytes`, and when the browser sends a `Range` header it replies with `206 Partial Content` and just the requested byte slice. This is what makes the scrubber/**seeking** work and what Safari/iOS require to start playback at all. With no `Range` header it falls back to a normal `200` full-file stream.
+
+#### `GET /files/stream?path=`
+Streams the **raw media bytes** inline (correct `Content-Type`, `Accept-Ranges: bytes`, cached 1 day; `206` for range requests, `200` otherwise).
 
 **Query params:**
 
 | Param | Required | Description                                   |
 |-------|----------|-----------------------------------------------|
-| paths | Yes      | Comma-separated full virtual paths            |
+| path  | Yes      | Full virtual path of the video/audio file     |
 | app   | No       | App id to scope the lookup (disambiguation)   |
 
-**Example:**
+**Embed in a page:**
+```html
+<video controls src="https://file-upload.nakson.services/files/stream?path=/device-videos/abc/clip.mp4"></video>
+```
+
+**cURL — play / save the whole file:**
 ```bash
-curl "http://localhost:3000/files/preview?paths=/images/a.png,/images/b.jpg,/docs/report.pdf"
+curl --get "http://localhost:3000/files/stream" \
+  --data-urlencode "path=/device-videos/abc/clip.mp4" \
+  -o clip.mp4
 ```
 
-**Response `200`:**
-```json
-{
-  "total": 2,
-  "failed": 1,
-  "previews": [
-    {
-      "name": "a.png",
-      "path": "/images/a.png",
-      "url": "http://localhost:3000/files/preview?path=%2Fimages%2Fa.png",
-      "mime_type": "image/png",
-      "size": "2.34 MB",
-      "size_bytes": 2453678
-    }
-  ],
-  "errors": [
-    { "path": "/docs/report.pdf", "error": "Not an image.", "mime_type": "application/pdf" }
-  ]
-}
+**cURL — verify Range works (request the first 1 MB, print response headers):**
+```bash
+curl -r 0-1048575 -D - --get "http://localhost:3000/files/stream" \
+  --data-urlencode "path=/device-videos/abc/clip.mp4" \
+  -o first_mb.part
+```
+Expected response headers:
+```
+HTTP/1.1 206 Partial Content
+Accept-Ranges: bytes
+Content-Range: bytes 0-1048575/6367371
+Content-Length: 1048576
 ```
 
-A site can fetch this list once, then render one `<img>` per `url`.
+> On **Windows PowerShell**, `curl` is an alias for `Invoke-WebRequest`. Use `curl.exe` so the flags above work.
+
+Responses: `206` (partial, range request), `200` (full file), `400` (missing `path`), `404` (not found), `415` (not video/audio), `410` (record exists but file missing on disk), `416` (range not satisfiable / malformed).
+
+> **Embedding behind a proxy:** if another service fronts this route (e.g. `/api/device-video/:id` that proxies here), it **must forward the incoming `Range` header** and pass the upstream `206` + `Content-Range` back to the client — otherwise seeking breaks again at the proxy layer.
 
 ---
 
@@ -591,8 +622,11 @@ All errors follow this shape:
 | 409    | Conflict (file or directory already exists)  |
 | 410    | File record exists but physical file is gone |
 | 413    | File too large or storage quota exceeded     |
-| 415    | Unsupported media type (preview: not an image)|
+| 415    | Unsupported media type (preview: not an image; stream: not video/audio) |
+| 416    | Requested range not satisfiable (stream)     |
 | 500    | Internal server error                        |
+
+> `/files/stream` also returns the success codes `200` (full file) and `206` (partial content for a range request).
 
 ---
 
@@ -642,7 +676,7 @@ filestore-api/
 │   ├── routes/
 │   │   ├── apps.js           # /apps endpoints
 │   │   ├── dirs.js           # /dirs endpoints
-│   │   └── files.js          # /files endpoints (incl. public /files/preview)
+│   │   └── files.js          # /files endpoints (incl. public /files/preview + /files/stream)
 │   └── utils/
 │       └── storage.js        # Path resolution, sanitization, helpers
 ├── storage/                  # Runtime: per-app file storage (gitignored)

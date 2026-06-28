@@ -194,9 +194,6 @@ router.get("/download", authenticate, async (req, res, next) => {
 // An <img> tag cannot send an Authorization header, so this route requires none.
 // Only image/* files are ever served. Optionally scope to a specific app with
 // ?app=<appId> (recommended when multiple apps share path names).
-//
-// Single image:  GET /files/preview?path=/dir/photo.png      → raw image bytes
-// Multiple:      GET /files/preview?paths=/a.png,/b.png       → JSON list of URLs
 router.get("/preview", async (req, res, next) => {
   const isImage = (m) => typeof m === "string" && m.startsWith("image/");
   const appId   = req.query.app || null;
@@ -212,49 +209,9 @@ router.get("/preview", async (req, res, next) => {
   }
 
   try {
-    // ── Multiple-image mode ──────────────────────────────────────────────────
-    if (req.query.paths) {
-      const list = String(req.query.paths)
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map(sanitizePath);
-
-      if (list.length === 0) {
-        return res.status(400).json({ error: "No valid paths provided." });
-      }
-
-      const base     = `${req.protocol}://${req.get("host")}/files/preview`;
-      const previews = [];
-      const errors   = [];
-
-      for (const virtualPath of list) {
-        const file = await findByPath(virtualPath);
-        if (!file) {
-          errors.push({ path: virtualPath, error: "File not found." });
-          continue;
-        }
-        if (!isImage(file.mimeType)) {
-          errors.push({ path: virtualPath, error: "Not an image.", mime_type: file.mimeType });
-          continue;
-        }
-        previews.push({
-          name:       file.name,
-          path:       file.fullPath,
-          url:        `${base}?path=${encodeURIComponent(file.fullPath)}`,
-          mime_type:  file.mimeType,
-          size:       formatBytes(file.size),
-          size_bytes: file.size,
-        });
-      }
-
-      return res.json({ total: previews.length, failed: errors.length, previews, errors });
-    }
-
-    // ── Single-image mode ────────────────────────────────────────────────────
     const rawPath = req.query.path;
     if (!rawPath) {
-      return res.status(400).json({ error: "Query param 'path' (or 'paths') is required." });
+      return res.status(400).json({ error: "Query param 'path' is required." });
     }
 
     const virtualPath = sanitizePath(rawPath);
@@ -278,6 +235,99 @@ router.get("/preview", async (req, res, next) => {
     res.setHeader("Cache-Control", "public, max-age=86400");
 
     return fs.createReadStream(realPath).pipe(res);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── GET /files/stream ─────────────────────────────────────────────────────────
+// PUBLIC, token-less streaming of VIDEO/AUDIO files WITH HTTP Range support, so
+// they can be embedded directly, e.g.
+//   <video controls src="https://host/files/stream?path=/dir/clip.mp4"></video>
+// A <video>/<audio> tag cannot send an Authorization header, so (like /preview)
+// this route requires none. Range support (206 Partial Content) is what enables
+// seeking and reliable playback on Safari/iOS — without it the scrubber won't
+// work and some browsers refuse to start. Only video/* and audio/* are served.
+// Optionally scope to an app with ?app=<appId> (recommended across apps).
+router.get("/stream", async (req, res, next) => {
+  const isStreamable = (m) =>
+    typeof m === "string" && (m.startsWith("video/") || m.startsWith("audio/"));
+  const appId = req.query.app || null;
+
+  const rawPath = req.query.path;
+  if (!rawPath) {
+    return res.status(400).json({ error: "Query param 'path' is required." });
+  }
+
+  const virtualPath = sanitizePath(rawPath);
+
+  try {
+    const file = appId
+      ? await prisma.file.findUnique({ where: { appId_fullPath: { appId, fullPath: virtualPath } } })
+      : await prisma.file.findFirst({ where: { fullPath: virtualPath } });
+
+    if (!file) {
+      return res.status(404).json({ error: "File not found.", path: virtualPath });
+    }
+    if (!isStreamable(file.mimeType)) {
+      return res.status(415).json({
+        error: "Only video/audio files can be streamed. Use /files/preview for images or /files/download for other types.",
+        path: virtualPath,
+        mime_type: file.mimeType,
+      });
+    }
+
+    const realPath = resolvePath(file.appId, file.fullPath);
+    if (!fs.existsSync(realPath)) {
+      return res.status(410).json({ error: "Media record exists but physical file is missing." });
+    }
+
+    const total = fs.statSync(realPath).size;
+    const range = req.headers.range;
+
+    res.setHeader("Content-Type", file.mimeType);
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+
+    // No Range header → serve the whole file (200). Browsers still buffer/play,
+    // but seeking is what the 206 path below makes work.
+    if (!range) {
+      res.setHeader("Content-Length", total);
+      return fs.createReadStream(realPath).pipe(res);
+    }
+
+    // Parse "bytes=start-end" (either side may be empty).
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+    if (!match || (match[1] === "" && match[2] === "")) {
+      res.setHeader("Content-Range", `bytes */${total}`);
+      return res.status(416).json({ error: "Malformed Range header." });
+    }
+
+    let start = match[1] === "" ? undefined : parseInt(match[1], 10);
+    let end   = match[2] === "" ? undefined : parseInt(match[2], 10);
+
+    if (start === undefined) {
+      // Suffix range "bytes=-N" → last N bytes.
+      start = Math.max(0, total - end);
+      end = total - 1;
+    } else if (end === undefined) {
+      // Open-ended "bytes=N-" → from N to the end.
+      end = total - 1;
+    } else {
+      // Clamp an explicit end that runs past EOF.
+      if (end >= total) end = total - 1;
+    }
+
+    if (start > end || start >= total) {
+      res.setHeader("Content-Range", `bytes */${total}`);
+      return res.status(416).json({ error: "Requested range not satisfiable." });
+    }
+
+    res.status(206);
+    res.setHeader("Content-Range", `bytes ${start}-${end}/${total}`);
+    res.setHeader("Content-Length", end - start + 1);
+
+    return fs.createReadStream(realPath, { start, end }).pipe(res);
   } catch (err) {
     next(err);
   }
